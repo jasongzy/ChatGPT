@@ -17,6 +17,12 @@ from functools import wraps
 from os import environ
 from os import getenv
 
+import tls_client
+from requests import HTTPError
+from tls_client.response import Response
+
+from revChatGPT.v1_server import Server
+
 try:
     from os import startfile
 except ImportError:
@@ -153,9 +159,9 @@ CAPTCHA_URL = getenv("CAPTCHA_URL", "https://bypass.churchless.tech/captcha/")
 
 
 def get_arkose_token(
-    download_images: bool = True,
-    solver: function = captcha_solver,
-    captcha_supported: bool = True,
+        download_images: bool = True,
+        solver: function = captcha_solver,
+        captcha_supported: bool = True,
 ) -> str:
     """
     The solver function should take in a list of images in base64 and a dict of challenge details
@@ -235,17 +241,18 @@ class Chatbot:
     """
     Chatbot class for ChatGPT
     """
+    session: tls_client.Session
 
     @logger(is_timed=True)
     def __init__(
-        self,
-        config: dict[str, str],
-        conversation_id: str | None = None,
-        parent_id: str | None = None,
-        lazy_loading: bool = True,
-        base_url: str | None = None,
-        captcha_solver: function = captcha_solver,
-        captcha_download_images: bool = True,
+            self,
+            config: dict[str, str],
+            conversation_id: str | None = None,
+            parent_id: str | None = None,
+            lazy_loading: bool = True,
+            base_url: str | None = None,
+            captcha_solver: function = captcha_solver,
+            captcha_download_images: bool = True,
     ) -> None:
         """Initialize a chatbot
 
@@ -281,7 +288,10 @@ class Chatbot:
             self.cache_path = Path(user_home, ".config", "revChatGPT", "cache.json")
 
         self.config = config
-        self.session = requests.Session()
+        # self.session = requests.Session()
+        self.server = Server()
+        self.session = self.server.session
+
         if "email" in config and "password" in config:
             try:
                 cached_access_token = self.__get_cached_access_token(
@@ -302,14 +312,14 @@ class Chatbot:
                 "http": config["proxy"],
                 "https": config["proxy"],
             }
-            if isinstance(self.session, AsyncClient):
-                proxies = {
-                    "http://": config["proxy"],
-                    "https://": config["proxy"],
-                }
-                self.session = AsyncClient(proxies=proxies)  # type: ignore
-            else:
-                self.session.proxies.update(proxies)
+            # if isinstance(self.session, AsyncClient):
+            #     proxies = {
+            #         "http://": config["proxy"],
+            #         "https://": config["proxy"],
+            #     }
+            #     self.session = AsyncClient(proxies=proxies)  # type: ignore
+            # else:
+            self.session.proxies.update(proxies)
 
         self.conversation_id = conversation_id or config.get("conversation_id")
         self.parent_id = parent_id or config.get("parent_id")
@@ -317,7 +327,7 @@ class Chatbot:
         self.conversation_id_prev_queue = []
         self.parent_id_prev_queue = []
         self.lazy_loading = lazy_loading
-        self.base_url = base_url or BASE_URL
+        self.base_url = base_url or "https://chat.openai.com/backend-api/"
         self.disable_history = config.get("disable_history", False)
 
         self.__check_credentials()
@@ -332,9 +342,7 @@ class Chatbot:
                         self.get_unverified_plugin(domain, install=True).get("id"),
                     )
                 else:
-                    self.config["plugin_ids"] = [
-                        self.get_unverified_plugin(domain, install=True).get("id"),
-                    ]
+                    self.config["plugin_ids"] = [self.get_unverified_plugin(domain, install=True).get("id")]
         # Get PUID cookie
         try:
             auth = Authenticator("blah", "blah")
@@ -517,18 +525,18 @@ class Chatbot:
 
     @logger(is_timed=True)
     def __send_request(
-        self,
-        data: dict,
-        auto_continue: bool = False,
-        timeout: float = 360,
-        **kwargs,
+            self,
+            data: dict,
+            auto_continue: bool = False,
+            timeout: float = 360,
+            **kwargs,
     ) -> Generator[dict, None, None]:
         log.debug("Sending the payload")
 
         if (
-            data.get("model", "").startswith("gpt-4")
-            and not self.config.get("SERVER_SIDE_ARKOSE")
-            and not getenv("SERVER_SIDE_ARKOSE")
+                data.get("model", "").startswith("gpt-4")
+                and not self.config.get("SERVER_SIDE_ARKOSE")
+                and not getenv("SERVER_SIDE_ARKOSE")
         ):
             try:
                 data["arkose_token"] = get_arkose_token(
@@ -546,16 +554,17 @@ class Chatbot:
 
         self.conversation_id_prev_queue.append(cid)
         self.parent_id_prev_queue.append(pid)
-        response = self.session.post(
+
+        response = self.server.request(
+            method="POST",
             url=f"{self.base_url}conversation",
-            data=json.dumps(data),
-            timeout=timeout,
-            stream=True,
+            json=data,
         )
         self.__check_response(response)
 
         finish_details = None
-        for line in response.iter_lines():
+        lines = response.content.split(b"\n")
+        for line in lines:
             # remove b' and ' at the beginning and end and ignore case
             line = str(line)[2:-1]
             if line.lower() == "internal server error":
@@ -595,9 +604,9 @@ class Chatbot:
             if line.get("message"):
                 author = metadata.get("author", {}) or line["message"].get("author", {})
                 if (
-                    line["message"].get("content")
-                    and line["message"]["content"].get("parts")
-                    and len(line["message"]["content"]["parts"]) > 0
+                        line["message"].get("content")
+                        and line["message"]["content"].get("parts")
+                        and len(line["message"]["content"]["parts"]) > 0
                 ):
                     message_exists = True
             message: str = (
@@ -627,25 +636,25 @@ class Chatbot:
             return
         message = message.strip("\n")
         for i in self.continue_write(
-            conversation_id=cid,
-            model=model,
-            timeout=timeout,
-            auto_continue=False,
+                conversation_id=cid,
+                model=model,
+                timeout=timeout,
+                auto_continue=False,
         ):
             i["message"] = message + i["message"]
             yield i
 
     @logger(is_timed=True)
     def post_messages(
-        self,
-        messages: list[dict],
-        conversation_id: str | None = None,
-        parent_id: str | None = None,
-        plugin_ids: list = None,
-        model: str | None = None,
-        auto_continue: bool = False,
-        timeout: float = 360,
-        **kwargs,
+            self,
+            messages: list[dict],
+            conversation_id: str | None = None,
+            parent_id: str | None = None,
+            plugin_ids: list = None,
+            model: str | None = None,
+            auto_continue: bool = False,
+            timeout: float = 360,
+            **kwargs,
     ) -> Generator[dict, None, None]:
         """Ask a question to the chatbot
         Args:
@@ -729,15 +738,15 @@ class Chatbot:
 
     @logger(is_timed=True)
     def ask(
-        self,
-        prompt: str,
-        conversation_id: str | None = None,
-        parent_id: str = "",
-        model: str = "",
-        plugin_ids: list = None,
-        auto_continue: bool = False,
-        timeout: float = 360,
-        **kwargs,
+            self,
+            prompt: str,
+            conversation_id: str | None = None,
+            parent_id: str = "",
+            model: str = "",
+            plugin_ids: list = None,
+            auto_continue: bool = False,
+            timeout: float = 360,
+            **kwargs,
     ) -> Generator[dict, None, None]:
         """Ask a question to the chatbot
         Args:
@@ -782,12 +791,12 @@ class Chatbot:
 
     @logger(is_timed=True)
     def continue_write(
-        self,
-        conversation_id: str | None = None,
-        parent_id: str = "",
-        model: str = "",
-        auto_continue: bool = False,
-        timeout: float = 360,
+            self,
+            conversation_id: str | None = None,
+            parent_id: str = "",
+            model: str = "",
+            auto_continue: bool = False,
+            timeout: float = 360,
     ) -> Generator[dict, None, None]:
         """let the chatbot continue to write.
         Args:
@@ -850,12 +859,12 @@ class Chatbot:
             "conversation_id": conversation_id,
             "parent_message_id": parent_id,
             "model": model
-            or self.config.get("model")
-            or (
-                "text-davinci-002-render-paid"
-                if self.config.get("paid")
-                else "text-davinci-002-render-sha"
-            ),
+                     or self.config.get("model")
+                     or (
+                         "text-davinci-002-render-paid"
+                         if self.config.get("paid")
+                         else "text-davinci-002-render-sha"
+                     ),
             "history_and_training_disabled": self.disable_history,
         }
         yield from self.__send_request(
@@ -873,7 +882,7 @@ class Chatbot:
         return True
 
     @logger(is_timed=False)
-    def __check_response(self, response: requests.Response) -> None:
+    def __check_response(self, response: "Response") -> None:
         """Make sure response is success
 
         Args:
@@ -882,8 +891,22 @@ class Chatbot:
         Raises:
             Error: _description_
         """
+        http_error_msg = ""
+        reason = ""
         try:
-            response.raise_for_status()
+            if 400 <= response.status_code < 500:
+                http_error_msg = (
+                    f"{response.status_code} Client Error: {reason} for url: {response.url}"
+                )
+
+            elif 500 <= response.status_code < 600:
+                http_error_msg = (
+                    f"{response.status_code} Server Error: {reason} for url: {response.url}"
+                )
+
+            if http_error_msg:
+                raise HTTPError(http_error_msg, response=self)
+
         except requests.exceptions.HTTPError as ex:
             error = t.Error(
                 source="OpenAI",
@@ -894,10 +917,10 @@ class Chatbot:
 
     @logger(is_timed=True)
     def get_conversations(
-        self,
-        offset: int = 0,
-        limit: int = 20,
-        encoding: str | None = None,
+            self,
+            offset: int = 0,
+            limit: int = 20,
+            encoding: str | None = None,
     ) -> list:
         """
         Get conversations
@@ -905,7 +928,7 @@ class Chatbot:
         :param limit: Integer
         """
         url = f"{self.base_url}conversations?offset={offset}&limit={limit}"
-        response = self.session.get(url)
+        response = self.server.request("GET", url)
         self.__check_response(response)
         if encoding is not None:
             response.encoding = encoding
@@ -916,22 +939,22 @@ class Chatbot:
     def get_msg_history(self, convo_id: str, encoding: str | None = None) -> list:
         """
         Get message history
-        :param id: UUID of conversation
+        :param convo_id: UUID of conversation
         :param encoding: String
         """
         url = f"{self.base_url}conversation/{convo_id}"
-        response = self.session.get(url)
+        response = self.server.request("GET", url)
         self.__check_response(response)
         if encoding is not None:
             response.encoding = encoding
         return response.json()
 
     def share_conversation(
-        self,
-        title: str = None,
-        convo_id: str = None,
-        node_id: str = None,
-        anonymous: bool = True,
+            self,
+            title: str = None,
+            convo_id: str = None,
+            node_id: str = None,
+            anonymous: bool = True,
     ) -> str:
         """
         Creates a share link to a conversation
@@ -957,7 +980,7 @@ class Chatbot:
             "is_anonymous": anonymous,
         }
         url = f"{self.base_url}share/create"
-        response = self.session.post(url, data=json.dumps(payload), headers=headers)
+        response = self.server.request("POST", url, data=json.dumps(payload), headers=headers)
         self.__check_response(response)
         share_url = response.json().get("share_url")
         # Then patch the share to make public
@@ -971,7 +994,7 @@ class Chatbot:
             "is_visible": True,
             "is_anonymous": True,
         }
-        response = self.session.patch(url, data=json.dumps(payload), headers=headers)
+        response = self.server.request("PATCH", url, data=json.dumps(payload), headers=headers)
         self.__check_response(response)
         return share_url
 
@@ -979,10 +1002,10 @@ class Chatbot:
     def gen_title(self, convo_id: str, message_id: str) -> str:
         """
         Generate title for conversation
-        :param id: UUID of conversation
+        :param convo_id: UUID of conversation
         :param message_id: UUID of message
         """
-        response = self.session.post(
+        response = self.server.request("POST",
             f"{self.base_url}conversation/gen_title/{convo_id}",
             data=json.dumps(
                 {"message_id": message_id, "model": "text-davinci-002-render"},
@@ -995,21 +1018,21 @@ class Chatbot:
     def change_title(self, convo_id: str, title: str) -> None:
         """
         Change title of conversation
-        :param id: UUID of conversation
+        :param convo_id: UUID of conversation
         :param title: String
         """
         url = f"{self.base_url}conversation/{convo_id}"
-        response = self.session.patch(url, data=json.dumps({"title": title}))
+        response = self.server.request("PATCH", url, data=json.dumps({"title": title}))
         self.__check_response(response)
 
     @logger(is_timed=True)
     def delete_conversation(self, convo_id: str) -> None:
         """
         Delete conversation
-        :param id: UUID of conversation
+        :param convo_id: UUID of conversation
         """
         url = f"{self.base_url}conversation/{convo_id}"
-        response = self.session.patch(url, data='{"is_visible": false}')
+        response = self.server.request("PATCH", url, data='{"is_visible": false}')
         self.__check_response(response)
 
     @logger(is_timed=True)
@@ -1018,7 +1041,7 @@ class Chatbot:
         Delete all conversations
         """
         url = f"{self.base_url}conversations"
-        response = self.session.patch(url, data='{"is_visible": false}')
+        response = self.server.request("PATCH", url, data='{"is_visible": false}')
         self.__check_response(response)
 
     @logger(is_timed=False)
@@ -1051,10 +1074,10 @@ class Chatbot:
 
     @logger(is_timed=True)
     def get_plugins(
-        self,
-        offset: int = 0,
-        limit: int = 250,
-        status: str = "approved",
+            self,
+            offset: int = 0,
+            limit: int = 250,
+            status: str = "approved",
     ) -> dict[str, str]:
         """
         Get plugins
@@ -1063,7 +1086,7 @@ class Chatbot:
         :param status: String. Status of plugin (approved)
         """
         url = f"{self.base_url}aip/p?offset={offset}&limit={limit}&statuses={status}"
-        response = self.session.get(url)
+        response = self.server.request("GET", url)
         self.__check_response(response)
         # Parse as JSON
         return json.loads(response.text)
@@ -1076,7 +1099,7 @@ class Chatbot:
         """
         url = f"{self.base_url}aip/p/{plugin_id}/user-settings"
         payload = {"is_installed": True}
-        response = self.session.patch(url, data=json.dumps(payload))
+        response = self.server.request("PATCH", url, data=json.dumps(payload))
         self.__check_response(response)
 
     @logger(is_timed=True)
@@ -1087,7 +1110,7 @@ class Chatbot:
         :param install: Boolean. Install plugin if found
         """
         url = f"{self.base_url}aip/p/domain?domain={domain}"
-        response = self.session.get(url)
+        response = self.server.request("GET", url)
         self.__check_response(response)
         if install:
             self.install_plugin(response.json().get("id"))
@@ -1098,12 +1121,12 @@ class AsyncChatbot(Chatbot):
     """Async Chatbot class for ChatGPT"""
 
     def __init__(
-        self,
-        config: dict,
-        conversation_id: str | None = None,
-        parent_id: str | None = None,
-        base_url: str | None = None,
-        lazy_loading: bool = True,
+            self,
+            config: dict,
+            conversation_id: str | None = None,
+            parent_id: str | None = None,
+            base_url: str | None = None,
+            lazy_loading: bool = True,
     ) -> None:
         """
         Same as Chatbot class, but with async methods.
@@ -1120,11 +1143,11 @@ class AsyncChatbot(Chatbot):
         self.session = AsyncClient(headers=self.session.headers)
 
     async def __send_request(
-        self,
-        data: dict,
-        auto_continue: bool = False,
-        timeout: float = 360,
-        **kwargs,
+            self,
+            data: dict,
+            auto_continue: bool = False,
+            timeout: float = 360,
+            **kwargs,
     ) -> AsyncGenerator[dict, None]:
         log.debug("Sending the payload")
 
@@ -1133,10 +1156,10 @@ class AsyncChatbot(Chatbot):
         self.conversation_id_prev_queue.append(cid)
         self.parent_id_prev_queue.append(pid)
         async with self.session.stream(
-            "POST",
-            url=f"{self.base_url}conversation",
-            data=json.dumps(data),
-            timeout=timeout,
+                "POST",
+                url=f"{self.base_url}conversation",
+                data=json.dumps(data),
+                timeout=timeout,
         ) as response:
             await self.__check_response(response)
 
@@ -1178,9 +1201,9 @@ class AsyncChatbot(Chatbot):
                         {},
                     )
                     if (
-                        line["message"].get("content")
-                        and line["message"]["content"].get("parts")
-                        and len(line["message"]["content"]["parts"]) > 0
+                            line["message"].get("content")
+                            and line["message"]["content"].get("parts")
+                            and len(line["message"]["content"]["parts"]) > 0
                     ):
                         message_exists = True
                 message: str = (
@@ -1210,24 +1233,24 @@ class AsyncChatbot(Chatbot):
                 return
             message = message.strip("\n")
             async for i in self.continue_write(
-                conversation_id=cid,
-                model=model,
-                timeout=timeout,
-                auto_continue=False,
+                    conversation_id=cid,
+                    model=model,
+                    timeout=timeout,
+                    auto_continue=False,
             ):
                 i["message"] = message + i["message"]
                 yield i
 
     async def post_messages(
-        self,
-        messages: list[dict],
-        conversation_id: str | None = None,
-        parent_id: str | None = None,
-        plugin_ids: list = None,
-        model: str | None = None,
-        auto_continue: bool = False,
-        timeout: float = 360,
-        **kwargs,
+            self,
+            messages: list[dict],
+            conversation_id: str | None = None,
+            parent_id: str | None = None,
+            plugin_ids: list = None,
+            model: str | None = None,
+            auto_continue: bool = False,
+            timeout: float = 360,
+            **kwargs,
     ) -> AsyncGenerator[dict, None]:
         """Post messages to the chatbot
 
@@ -1305,22 +1328,22 @@ class AsyncChatbot(Chatbot):
         if len(plugin_ids) > 0 and not conversation_id:
             data["plugin_ids"] = plugin_ids
         async for msg in self.__send_request(
-            data,
-            timeout=timeout,
-            auto_continue=auto_continue,
+                data,
+                timeout=timeout,
+                auto_continue=auto_continue,
         ):
             yield msg
 
     async def ask(
-        self,
-        prompt: str,
-        conversation_id: str | None = None,
-        parent_id: str = "",
-        model: str = "",
-        plugin_ids: list = None,
-        auto_continue: bool = False,
-        timeout: int = 360,
-        **kwargs,
+            self,
+            prompt: str,
+            conversation_id: str | None = None,
+            parent_id: str = "",
+            model: str = "",
+            plugin_ids: list = None,
+            auto_continue: bool = False,
+            timeout: int = 360,
+            **kwargs,
     ) -> AsyncGenerator[dict, None]:
         """Ask a question to the chatbot
 
@@ -1356,23 +1379,23 @@ class AsyncChatbot(Chatbot):
         ]
 
         async for msg in self.post_messages(
-            messages=messages,
-            conversation_id=conversation_id,
-            parent_id=parent_id,
-            plugin_ids=plugin_ids,
-            model=model,
-            auto_continue=auto_continue,
-            timeout=timeout,
+                messages=messages,
+                conversation_id=conversation_id,
+                parent_id=parent_id,
+                plugin_ids=plugin_ids,
+                model=model,
+                auto_continue=auto_continue,
+                timeout=timeout,
         ):
             yield msg
 
     async def continue_write(
-        self,
-        conversation_id: str | None = None,
-        parent_id: str = "",
-        model: str = "",
-        auto_continue: bool = False,
-        timeout: float = 360,
+            self,
+            conversation_id: str | None = None,
+            parent_id: str = "",
+            model: str = "",
+            auto_continue: bool = False,
+            timeout: float = 360,
     ) -> AsyncGenerator[dict, None]:
         """let the chatbot continue to write
         Args:
@@ -1423,18 +1446,18 @@ class AsyncChatbot(Chatbot):
             "conversation_id": conversation_id,
             "parent_message_id": parent_id,
             "model": model
-            or self.config.get("model")
-            or (
-                "text-davinci-002-render-paid"
-                if self.config.get("paid")
-                else "text-davinci-002-render-sha"
-            ),
+                     or self.config.get("model")
+                     or (
+                         "text-davinci-002-render-paid"
+                         if self.config.get("paid")
+                         else "text-davinci-002-render-sha"
+                     ),
             "history_and_training_disabled": self.disable_history,
         }
         async for msg in self.__send_request(
-            data=data,
-            auto_continue=auto_continue,
-            timeout=timeout,
+                data=data,
+                auto_continue=auto_continue,
+                timeout=timeout,
         ):
             yield msg
 
@@ -1451,9 +1474,9 @@ class AsyncChatbot(Chatbot):
         return data["items"]
 
     async def get_msg_history(
-        self,
-        convo_id: str,
-        encoding: str | None = "utf-8",
+            self,
+            convo_id: str,
+            encoding: str | None = "utf-8",
     ) -> dict:
         """
         Get message history
@@ -1468,11 +1491,11 @@ class AsyncChatbot(Chatbot):
         return None
 
     async def share_conversation(
-        self,
-        title: str = None,
-        convo_id: str = None,
-        node_id: str = None,
-        anonymous: bool = True,
+            self,
+            title: str = None,
+            convo_id: str = None,
+            node_id: str = None,
+            anonymous: bool = True,
     ) -> str:
         """
         Creates a share link to a conversation
@@ -1666,7 +1689,7 @@ def main(config: dict) -> NoReturn:
             print(f"{bcolors.OKGREEN + bcolors.BOLD}Chatbot: {bcolors.ENDC}")
             prev_text = ""
             for data in chatbot.continue_write():
-                message = data["message"][len(prev_text) :]
+                message = data["message"][len(prev_text):]
                 print(message, end="", flush=True)
                 prev_text = data["message"]
             print(bcolors.ENDC)
