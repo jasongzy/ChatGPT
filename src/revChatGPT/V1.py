@@ -40,7 +40,7 @@ from typing import Callable as function
 import httpx
 import requests
 from httpx import AsyncClient
-from OpenAIAuth import Auth0 as Authenticator
+from revChatGPT.OpenAIAuth import Auth0 as Authenticator
 from rich.live import Live
 from rich.markdown import Markdown
 
@@ -275,7 +275,7 @@ class Chatbot:
         Raises:
             Exception: _description_
         """
-        user_home = getenv("HOME") or getenv("USERPROFILE")
+        user_home = getenv("HOME_AI") or getenv("USERPROFILE")
         if user_home is None:
             user_home = Path().cwd()
             self.cache_path = Path(Path().cwd(), ".chatgpt_cache.json")
@@ -1617,7 +1617,7 @@ def configure() -> dict:
     config_files: list[Path] = [Path("config.json")]
     if xdg_config_home := getenv("XDG_CONFIG_HOME"):
         config_files.append(Path(xdg_config_home, "revChatGPT/config.json"))
-    if user_home := getenv("HOME"):
+    if user_home := getenv("HOME_AI"):
         config_files.append(Path(user_home, ".config/revChatGPT/config.json"))
     if windows_home := getenv("HOMEPATH"):
         config_files.append(Path(f"{windows_home}/.config/revChatGPT/config.json"))
