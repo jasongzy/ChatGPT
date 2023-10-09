@@ -23,7 +23,7 @@ class Server:
         if PUID:
             headers["cookie"] = f"_puid={PUID};"
 
-        r = self.session.execute_request(method=method.upper(), url=url, headers=headers, **kwargs)
+        r = self.session.execute_request(method=method.upper(), url=url, headers=headers, timeout_seconds=180, **kwargs)
         return r
 
     def headers(self):

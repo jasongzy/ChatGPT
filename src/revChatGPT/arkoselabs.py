@@ -1,7 +1,7 @@
 import tls_client as requests
 
 
-def GetLoginArkoseToken():
+def GetLoginArkoseToken(proxy: dict = None) -> str:
     public_key = "0A1D34FC-659D-4E23-B17B-694DCFCF6A6C"
     session = requests.Session(
         client_identifier="chrome117",
@@ -32,11 +32,13 @@ def GetLoginArkoseToken():
         'sec-fetch-site': 'same-origin',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36'
     }
-
+    
+    if proxy:
+        session.proxies.update(proxy)
     response = session.post(url, headers=headers, data=payload)
 
     token = response.json().get("token")
     return token
 
 
-GetLoginArkoseToken()
+# print(GetLoginArkoseToken())

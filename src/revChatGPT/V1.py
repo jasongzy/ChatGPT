@@ -49,6 +49,7 @@ from . import typings as t
 from .utils import create_completer
 from .utils import create_session
 from .utils import get_input
+from .arkoselabs import GetLoginArkoseToken
 
 
 def generate_random_hex(length: int = 17) -> str:
@@ -539,10 +540,13 @@ class Chatbot:
                 and not getenv("SERVER_SIDE_ARKOSE")
         ):
             try:
-                data["arkose_token"] = get_arkose_token(
-                    self.captcha_download_images,
-                    self.captcha_solver,
-                    captcha_supported=False,
+                # data["arkose_token"] = get_arkose_token(
+                #     self.captcha_download_images,
+                #     self.captcha_solver,
+                #     captcha_supported=False,
+                # )
+                data["arkose_token"] = GetLoginArkoseToken(
+                    proxy={"http": self.config["proxy"], "https": self.config["proxy"]}
                 )
                 # print(f"Arkose token obtained: {data['arkose_token']}")
             except Exception as e:
