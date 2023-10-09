@@ -16,7 +16,7 @@ Reverse Engineered ChatGPT API by OpenAI. Extensible for chatbots etc.
 pip install git+https://github.com/3mora2/ChatGPT
 ```
 
-Organ
+Origin
 ```
 python -m pip install --upgrade revChatGPT
 ```
